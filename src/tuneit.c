@@ -100,29 +100,29 @@ schmittS16LE (int nframes, signed short int *indata)
       schmittPointer = schmittBuffer;
 
       for (j=0,A1=0,A2=0; j<blockSize; j++) {
-	if (schmittBuffer[j]>0 && A1<schmittBuffer[j])  A1 = schmittBuffer[j];
-	if (schmittBuffer[j]<0 && A2<-schmittBuffer[j]) A2 = -schmittBuffer[j];
+        if (schmittBuffer[j]>0 && A1<schmittBuffer[j])  A1 = schmittBuffer[j];
+        if (schmittBuffer[j]<0 && A2<-schmittBuffer[j]) A2 = -schmittBuffer[j];
       }
       t1 =   (int)( A1 * trigfact + 0.5);
       t2 = - (int)( A2 * trigfact + 0.5);
       startpoint=0;
       for (j=1; schmittBuffer[j]<=t1 && j<blockSize; j++);
       for (; !(schmittBuffer[j]  >=t2 &&
-	       schmittBuffer[j+1]< t2) && j<blockSize; j++);
+         schmittBuffer[j+1]< t2) && j<blockSize; j++);
       startpoint=j;
       schmittTriggered=0;
       endpoint=startpoint+1;
       for(j=startpoint,tc=0; j<blockSize; j++) {
-	if (!schmittTriggered) {
-	  schmittTriggered = (schmittBuffer[j] >= t1);
-	} else if (schmittBuffer[j]>=t2 && schmittBuffer[j+1]<t2) {
-	  endpoint=j;
-	  tc++;
-	  schmittTriggered = 0;
-	}
+         if (!schmittTriggered) {
+           schmittTriggered = (schmittBuffer[j] >= t1);
+         } else if (schmittBuffer[j]>=t2 && schmittBuffer[j+1]<t2) {
+           endpoint=j;
+           tc++;
+           schmittTriggered = 0;
+         }
       }
       if (endpoint > startpoint) {
-	displayFrequency((double)rate*(tc/(double)(endpoint-startpoint)));
+        displayFrequency((double)rate*(tc/(double)(endpoint-startpoint))/2);
       }
     }
   }
@@ -216,13 +216,13 @@ fftMeasure (int nframes, int overlap, float *indata)
       fftwf_execute(fftPlan);
 
       for (k=0; k<=fftSize/2; k++) {
-	long qpd;
-	float
-	  real = creal(fftOut[k]),
-	  imag = cimag(fftOut[k]),
-	  magnitude = 20.*log10(2.*sqrt(real*real + imag*imag)/fftSize),
-	  phase = atan2(imag, real),
-	  tmp, freq;
+        long qpd;
+        float
+	      real = creal(fftOut[k]),
+	      imag = cimag(fftOut[k]),
+	      magnitude = 20.*log10(2.*sqrt(real*real + imag*imag)/fftSize),
+	      phase = atan2(imag, real),
+	      tmp, freq;
 
         /* compute phase difference */
         tmp = phase - fftLastPhase[k];
@@ -243,11 +243,11 @@ fftMeasure (int nframes, int overlap, float *indata)
         /* compute the k-th partials' true frequency */
         freq = (double)k*freqPerBin + tmp*freqPerBin;
 
-	if (freq > 0.0 && magnitude > peaks[0].db) {
-	  memmove(peaks+1, peaks, sizeof(Peak)*(MAX_PEAKS-1));
-	  peaks[0].freq = freq;
-	  peaks[0].db = magnitude;
-	}
+				if (freq > 0.0 && magnitude > peaks[0].db) {
+				  memmove(peaks+1, peaks, sizeof(Peak)*(MAX_PEAKS-1));
+				  peaks[0].freq = freq;
+				  peaks[0].db = magnitude;
+				}
       }
       fftFrameCount++;
       if (fftFrameCount > 0 && fftFrameCount % overlap == 0) {
@@ -306,8 +306,8 @@ static const MeasureAlgorithm fftAlgorithm = {
 typedef struct {
   void (*init) (void);
   void (*listPorts) (void);
-  void (*open) (char *);
-  void (*run) (void);
+  void (*open) (char *, int *);
+  void (*run) (int *);
   void (*close) (void);
   void (*free) (void);
 } AudioInterface;
@@ -374,7 +374,7 @@ alsaListPorts ()
 }
 
 static void
-alsaOpen (char *captureDevice)
+alsaOpen (char *captureDevice, int* min_channels)
 {
   snd_pcm_hw_params_t *hw_params;
   char *deviceName;
@@ -404,7 +404,9 @@ alsaOpen (char *captureDevice)
   DO_OR_DIE(snd_pcm_hw_params_set_rate_near(alsaHandle, hw_params,
 					    &rate, 0),
 	    "Cannot set sample rate");
-  DO_OR_DIE(snd_pcm_hw_params_set_channels(alsaHandle, hw_params, 1),
+  DO_OR_DIE(snd_pcm_hw_params_get_channels_min(hw_params, min_channels),
+	    "Cannot get channels min.");
+  DO_OR_DIE(snd_pcm_hw_params_set_channels(alsaHandle, hw_params, *min_channels),
 	    "Cannot set channel count (mono)");
   DO_OR_DIE(snd_pcm_hw_params(alsaHandle, hw_params),
 	    "Cannot set hardware parameters");
@@ -412,20 +414,30 @@ alsaOpen (char *captureDevice)
 }
 
 static void
-alsaRun ()
+alsaRun (int *min_channels)
 {
   int result;
   int nFrames = 0;
-  signed short int buf[4096];
+  signed short int* buf;
+  int SAMPLE_SIZE=1024;
+  int bufSize=(SAMPLE_SIZE*(*min_channels));
+  buf=calloc(bufSize, sizeof(signed short int));
 
   DO_OR_DIE(snd_pcm_prepare(alsaHandle),
 	    "Cannot prepare ALSA audio interface");
 
-  while ((nFrames = snd_pcm_readi(alsaHandle, buf, 512)) > 0) {
+  while ((nFrames = snd_pcm_readi(alsaHandle, buf, SAMPLE_SIZE)) > 0) {
+    if (nFrames != SAMPLE_SIZE) {
+      printf("\nIncorrect frame count should be %i frames but was %d.",SAMPLE_SIZE, nFrames);
+    }
+    //condense the interleaved buffer of multiple channels to single(each frame should start with mono).
+    for(int i=0; i<bufSize; i+=(*min_channels)) {
+      buf[i/(*min_channels)]=buf[i];
+    }
     algorithm->measures16(nFrames, buf);
   }
-
-  printf("\nALSA error: %s\n", snd_strerror(nFrames));
+  free(buf);
+  printf("\nALSA snd_pcm_read error: %s\n", snd_strerror(nFrames));
 }
 
 static void
@@ -509,7 +521,7 @@ jackListPorts ()
 }
 
 static void
-jackOpen (char *source_name)
+jackOpen (char *source_name, int *min_channels)
 {
   rate = jack_get_sample_rate(jackClient);
   if (jack_activate(jackClient)) {
@@ -539,7 +551,7 @@ jackOpen (char *source_name)
 }
 
 static void
-jackRun ()
+jackRun (int *min_channels)
 {
   if (jack_connect(jackClient, jackSourceName, jack_port_name(jackPort))) {
     fprintf (stderr, "Cannot connect input port %s to %s\n",
@@ -637,12 +649,13 @@ int main(int argc, char *argv[])
     }
   }
   audio->init();
+  int min_channels=1;
   if (listAndExit) {
     audio->listPorts();
   } else {
-    audio->open(captureDevice);
+    audio->open(captureDevice, &min_channels);
     algorithm->init(latency);
-    audio->run();
+    audio->run(&min_channels);
     audio->close();
   }
   audio->free();
